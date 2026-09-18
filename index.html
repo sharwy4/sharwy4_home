@@ -279,7 +279,8 @@ function renderTiles() {
 
   if (typeof val("13") === "number") {
     const A = val("13"), h = clean("13"), bad = h.filter(p => p.v >= 1).length;
-    out.push(tile("13", `<div class="big">${A}<small>/ 3</small></div>`, `${chip(judge["13"](A))}${meter(A / 3 * 100)}
+    const aqOff = powerMode() === 2;
+    out.push(tile("13", `<div class="big" style="${aqOff ? "opacity:.45" : ""}">${A}<small>/ 3</small></div>`, `${chip(aqOff ? V("Вимкнено — плата спить, нагрівач знеструмлено", "--info") : judge["13"](A))}${meter(A / 3 * 100)}
       <div class="meta">0 — чисте · 3 — дуже забруднене${h.length ? `<br>з забрудненням: <b>${Math.round(bad / h.length * 100)}%</b> вимірів` : ""}</div>`));
   } else out.push(empty("13"));
 
@@ -313,7 +314,10 @@ function renderTiles() {
       ${pm !== null ? `<br>режим: <b style="color:${css(PM[pm].c)}">${PM[pm].t}</b>` : ""}${toSleep !== null ? ` · до сну ≈ <b>${fmt(toSleep, 1)} год</b>` : ""}</div>`));
   } else out.push(empty("14"));
 
-  $("tiles").innerHTML = out.join("");
+  const pm = powerMode();
+  const note = pm === 2 ? `<div class="banner" style="grid-column:1/-1;margin:0">🌙 Плата в режимі <b>Сон</b> (акумулятор нижче 3.65 В): датчики не опитуються, показано останні значення перед засинанням. Раз на годину приходить лише напруга. Плата прокинеться сама, коли сонце зарядить акумулятор до 3.80 В.</div>`
+    : pm === 1 ? `<div class="banner" style="grid-column:1/-1;margin:0">🔋 Режим <b>Економ</b> (акумулятор нижче 3.80 В): GPS вимкнено, дані приходять раз на 5 хв.</div>` : "";
+  $("tiles").innerHTML = note + out.join("");
   // спарклайни — ECharts без осей
   ["5", "11", "10", "13", "12", "6", "7", "14"].forEach(n => {
     const el = $("sp-" + n); if (!el) return;
