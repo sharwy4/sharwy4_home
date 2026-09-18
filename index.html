@@ -193,7 +193,7 @@ const M = {
   "5":  { title: "Температура", unit: "°C", c: "--temp", ico: "🌡", dec: 1, valid: v => v !== 0 && v > -40 && v < 85 },
   "11": { title: "Вологість", unit: "%", c: "--hum", ico: "💧", dec: 0, valid: v => v > 0 && v <= 100 },
   "10": { title: "Атм. тиск", unit: "гПа", c: "--pres", ico: "◎", dec: 1, valid: v => v > 300 && v < 1100 },
-  "13": { title: "Якість повітря", unit: "/ 3", c: "--air", ico: "☁", dec: 0, step: true, min: 0, max: 3 },
+  "13": { title: "Якість повітря", unit: "/ 3", c: "--air", ico: "☁", dec: 0, step: true, min: 0, max: 3, valid: v => v >= 0 && v <= 3 },
   "12": { title: "Шум", unit: "відн. од.", c: "--noise", ico: "♪", dec: 0 },
   "15": { title: "Шум, пік", unit: "відн. од.", c: "--bad", dec: 0 },
   // Датчик на 3.3 В насичується на ~659 АЦП (5 В на Mbili немає) — показуємо % від ЦІЄЇ межі
@@ -277,7 +277,7 @@ function renderTiles() {
       <div class="meta">${hint}</div>`));
   } else out.push(empty("10"));
 
-  if (typeof val("13") === "number") {
+  if (typeof val("13") === "number" && val("13") >= 0 && val("13") <= 3) {
     const A = val("13"), h = clean("13"), bad = h.filter(p => p.v >= 1).length;
     const aqOff = powerMode() === 2;
     out.push(tile("13", `<div class="big" style="${aqOff ? "opacity:.45" : ""}">${A}<small>/ 3</small></div>`, `${chip(aqOff ? V("Вимкнено — плата спить, нагрівач знеструмлено", "--info") : judge["13"](A))}${meter(A / 3 * 100)}
