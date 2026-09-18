@@ -144,6 +144,7 @@ const DEVICE_ID = "7vDnKxQHhCdtJsodSuFgdHAR";
 const DEVICE_TOKEN = "4TOdQcfLxa5cDMbz1EUBr1ZLNEkrixKj3NgYTqvw"; // свідомо видимий (особистий дашборд)
 const STATE_REFRESH_MS = 15000, HISTORY_REFRESH_MS = 60000;
 const GAP_MS = 10 * 60e3;
+const LIGHT_MAX = 659; // реальний максимум АЦП Light sensor при живленні 3.3 В (виміряно)
 /* ================================================ */
 const API = "https://api.allthingstalk.io";
 const AUTH = { Authorization: `Bearer maker:${DEVICE_TOKEN}` };
@@ -189,10 +190,11 @@ const M = {
   "13": { title: "Якість повітря", unit: "/ 3", c: "--air", ico: "☁", dec: 0, step: true, min: 0, max: 3 },
   "12": { title: "Шум", unit: "відн. од.", c: "--noise", ico: "♪", dec: 0 },
   "15": { title: "Шум, пік", unit: "відн. од.", c: "--bad", dec: 0 },
-  "6":  { title: "Освітлення", unit: "/ 1023", c: "--light", ico: "☀", dec: 0 },
+  // Датчик на 3.3 В насичується на ~659 АЦП (5 В на Mbili немає) — показуємо % від ЦІЄЇ межі
+  "6":  { title: "Освітлення", unit: "%", c: "--light", ico: "☀", dec: 0, min: 0, max: 100, tf: v => Math.min(100, v / LIGHT_MAX * 100) },
   "7":  { title: "Рух (PIR)", unit: "", c: "--pir", ico: "◉", bool: true },
   "14": { title: "Батарея", unit: "%", c: "--batt", ico: "▮", dec: 0, min: 0, max: 100 },
-  "18": { title: "Напруга батареї", unit: "В", c: "--batt", dec: 2, valid: v => v > 2 && v < 6 },
+  "18": { title: "Напруга батареї", unit: "В", c: "--batt", dec: 2, valid: v => v > 2 && v < 6, min: 3.0, max: 4.4 },
 };
 const val = n => assets[n]?.state?.value, at = n => assets[n]?.state?.at;
 const clean = n => (history[n] || []).filter(p => M[n]?.bool ? typeof p.v === "boolean" : (typeof p.v === "number" && (!M[n]?.valid || M[n].valid(p.v))));
@@ -204,7 +206,7 @@ function ago(t) {
   return s < 60 ? `${Math.round(s)} с тому` : s < 3600 ? `${Math.round(s / 60)} хв тому` : s < 86400 ? `${Math.round(s / 3600)} год тому` : `${Math.round(s / 86400)} дн тому`;
 }
 function stats(n) {
-  const vs = clean(n).map(p => p.v); if (!vs.length) return null;
+  const vs = clean(n).map(p => M[n]?.tf ? M[n].tf(p.v) : p.v); if (!vs.length) return null;
   return { min: Math.min(...vs), max: Math.max(...vs), avg: vs.reduce((a, b) => a + b, 0) / vs.length, n: vs.length };
 }
 function trend(n, minutes, thr) {
@@ -229,7 +231,7 @@ const judge = {
   "11": v => v < 30 ? V("Дуже сухо", "--bad") : v < 40 ? V("Сухувато", "--warn") : v <= 60 ? V("Комфортно", "--ok") : v <= 70 ? V("Вологувато", "--warn") : V("Дуже волого", "--bad"),
   "13": v => [V("Чисте повітря", "--ok"), V("Легке забруднення", "--warn"), V("Сильне забруднення", "--bad"), V("Провітріть негайно", "--bad")][v] || V("Невідомо", "--muted"),
   "12": v => v < 25 ? V("Тихо", "--ok") : v < 60 ? V("Звичайний фон", "--ok") : v < 120 ? V("Гучно", "--warn") : V("Дуже гучно", "--bad"),
-  "6": v => v < 30 ? V("Темно", "--muted") : v < 200 ? V("Тьмяно", "--info") : v < 600 ? V("Нормально", "--ok") : V("Яскраво", "--warn"),
+  "6": p => p < 3 ? V("Темно", "--muted") : p < 25 ? V("Тьмяно", "--info") : p < 85 ? V("Нормально", "--ok") : p < 98 ? V("Яскраво", "--warn") : V("Межа датчика — яскравіше не розрізнить", "--warn"),
   "14": v => v >= 60 ? V("Добрий заряд", "--ok") : v >= 25 ? V("Середній", "--warn") : V("Низький заряд", "--bad"),
 };
 const chip = j => `<span class="chip" style="--cc:${css(j.c)}">${j.text}</span>`;
@@ -283,8 +285,9 @@ function renderTiles() {
 
   if (typeof val("6") === "number") {
     const Lt = val("6");
-    out.push(tile("6", `<div class="big">${Lt}<small>/ 1023</small></div>`, `${chip(judge["6"](Lt))}${meter(Lt / 1023 * 100)}
-      <div class="meta">сире АЦП, не люкси · насичується ≈650 при 3.3 В</div>`));
+    const Lp = M["6"].tf(Lt);
+    out.push(tile("6", `<div class="big">${fmt(Lp, 0)}<small>%</small></div>`, `${chip(judge["6"](Lp))}${meter(Lp)}
+      <div class="meta">АЦП <b>${Lt}</b> з ${LIGHT_MAX} можливих (межа датчика при 3.3 В) · відносна шкала, не люкси</div>`));
   } else out.push(empty("6"));
 
   if (typeof val("7") === "boolean") {
@@ -326,7 +329,7 @@ function series(n) { // з розривами (null) там, де плата м�
   const raw = clean(n), out = [];
   raw.forEach((p, i) => {
     if (i && p.t - raw[i - 1].t > GAP_MS) out.push([raw[i - 1].t + 1, null]);
-    out.push([p.t, M[n].bool ? (p.v ? 1 : 0) : p.v]);
+    out.push([p.t, M[n].bool ? (p.v ? 1 : 0) : M[n].tf ? M[n].tf(p.v) : p.v]);
   });
   return out;
 }
@@ -345,7 +348,7 @@ const timeFmt = t => { const d = new Date(t);
     : d.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }); };
 
 const CHARTS = [
-  { n: "5" }, { n: "11" }, { n: "10" }, { n: "12", extra: "15" }, { n: "6" }, { n: "13" }, { n: "7" }, { n: "18", title: "Батарея, В" },
+  { n: "5" }, { n: "11" }, { n: "10" }, { n: "12", extra: "15" }, { n: "6" }, { n: "13" }, { n: "7", title: "Рух — спрацювання PIR" }, { n: "18", title: "Батарея, В" },
 ];
 const charts = {};
 function baseOpt() {
@@ -372,8 +375,27 @@ function buildCharts() {
   ["comfort", "uplink"].forEach(k => { charts[k] = echarts.init($("c-" + k)); });
   echarts.connect(CHARTS.map(c => charts[c.n]));
 }
+function motionBuckets() { // кількість нових спрацювань PIR (фронт тихо→рух) у кожному інтервалі
+  const h = clean("7"), bucket = rangeHours <= 1 ? 5 * 60e3 : rangeHours <= 6 ? 15 * 60e3 : rangeHours <= 24 ? 3600e3 : 3 * 3600e3;
+  const now = Date.now(), start = now - rangeHours * 3600e3, n = Math.ceil((now - start) / bucket), cnt = Array(n).fill(0);
+  h.forEach((p, i) => { if (p.v && (i === 0 || !h[i - 1].v)) { const k = Math.floor((p.t - start) / bucket); if (k >= 0 && k < n) cnt[k]++; } });
+  return { data: cnt.map((c, i) => [start + i * bucket + bucket / 2, c]), bucket };
+}
+function updateMotion() {
+  const { data, bucket } = motionBuckets(), o = baseOpt(), total = data.reduce((a, d) => a + d[1], 0);
+  const ax = niceAxis(0, Math.max(4, ...data.map(d => d[1])));
+  Object.assign(o.yAxis, { min: 0, max: ax.max, interval: ax.interval, minInterval: 1 });
+  const label = bucket >= 3600e3 ? `${bucket / 3600e3} год` : `${bucket / 60e3} хв`;
+  o.tooltip.formatter = ps => `${timeFmt(ps[0].value[0] - bucket / 2)}–${timeFmt(ps[0].value[0] + bucket / 2)}<br>спрацювань: <b>${ps[0].value[1]}</b>`;
+  const col = css("--pir");
+  o.series = [{ type: "bar", data, barWidth: "75%", itemStyle: { borderRadius: [4, 4, 0, 0],
+    color: p => p.value[1] ? hexA(col, .35 + .65 * p.value[1] / ax.max) : "transparent" } }];
+  charts["7"].setOption(o, true);
+  $("st-7").innerHTML = `<b>${total}</b> спрацювань · стовпчик = ${label}`;
+}
 function updateCharts() {
   CHARTS.forEach(c => {
+    if (c.n === "7") return updateMotion();
     const m = M[c.n], data = series(c.n), s = stats(c.n);
     const o = baseOpt();
     const dec = m.dec ?? 1;
@@ -386,7 +408,7 @@ function updateCharts() {
       const vs = data.map(p => p[1]).filter(v => v !== null).concat(extraVals);
       let lo = m.min ?? Math.min(...vs), hi = m.max ?? Math.max(...vs);
       const pad = (hi - lo) * .08 || 1; if (m.min === undefined) lo = c.n === "5" ? lo - pad : Math.max(0, lo - pad); if (m.max === undefined) hi += pad;
-      const ax = niceAxis(lo, hi);
+      const ax = c.n === "18" ? { min: 3.0, max: 4.4, interval: 0.2, dec: 1 } : niceAxis(lo, hi);
       Object.assign(o.yAxis, { min: ax.min, max: ax.max, interval: ax.interval,
         axisLabel: { color: css("--muted"), formatter: v => v.toLocaleString("uk-UA", { maximumFractionDigits: ax.dec, minimumFractionDigits: ax.dec }) } });
     }
@@ -399,7 +421,10 @@ function updateCharts() {
       markLine: s && !m.bool && !m.step ? { symbol: "none", silent: true, label: { color: css("--muted"), fontSize: 10, formatter: `сер ${fmt(s.avg, dec)}` },
         lineStyle: { color: col, type: "dotted", opacity: .6 }, data: [{ yAxis: s.avg }] } : undefined,
       markArea: c.n === "11" ? { silent: true, itemStyle: { color: hexA(css("--ok"), .07) }, data: [[{ yAxis: 40 }, { yAxis: 60 }]] }
-              : c.n === "5" ? { silent: true, itemStyle: { color: hexA(css("--ok"), .07) }, data: [[{ yAxis: 20 }, { yAxis: 24 }]] } : undefined }];
+              : c.n === "5" ? { silent: true, itemStyle: { color: hexA(css("--ok"), .07) }, data: [[{ yAxis: 20 }, { yAxis: 24 }]] }
+              : c.n === "18" ? { silent: true, label: { color: css("--muted"), fontSize: 10, position: "insideTopLeft" }, data: [
+                  [{ yAxis: 3.0, name: "розряджена", itemStyle: { color: hexA(css("--bad"), .1) } }, { yAxis: 3.5 }],
+                  [{ yAxis: 4.15, name: "заряд / USB", itemStyle: { color: hexA(css("--info"), .1) } }, { yAxis: 4.4 }]] } : undefined }];
     if (c.extra) o.series.push({ name: "пік", type: "line", data: series(c.extra), showSymbol: false, sampling: "lttb",
       lineStyle: { width: 1, type: "dashed", color: css("--bad"), opacity: .7 }, itemStyle: { color: css("--bad") } });
     charts[c.n].setOption(o, true);
@@ -473,8 +498,25 @@ function initMap() {
   const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
   const saved = safeGet("mapLayer");
   (layers[saved] || layers[dark ? "Темна" : "Звичайна"]).addTo(map);
-  L.control.layers(layers, null, { position: "topright" }).addTo(map);
+  const ctl = L.control.layers(layers, null, { position: "topright" }).addTo(map);
+  addWeather(ctl);
   map.on("baselayerchange", e => safeSet("mapLayer", e.name));
+}
+// Погода онлайн: радар опадів RainViewer (безкоштовно, без ключа), оновлюється кожні 10 хв
+async function addWeather(ctl) {
+  const radar = L.tileLayer("", { opacity: .7, maxNativeZoom: 7, maxZoom: 19, attribution: "Радар © RainViewer" });
+  const refresh = async () => {
+    try {
+      const j = await (await fetch("https://api.rainviewer.com/public/weather-maps.json")).json();
+      const f = j.radar.past.at(-1);
+      radar.setUrl(`${j.host}${f.path}/256/{z}/{x}/{y}/4/1_1.png`);
+      $("mapNote").dataset.radar = new Date(f.time * 1000).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
+    } catch { /* радар недоступний — карта працює без нього */ }
+  };
+  await refresh(); setInterval(refresh, 10 * 60e3);
+  ctl.addOverlay(radar, "🌧 Радар опадів (онлайн)");
+  if (safeGet("radar") === "1") radar.addTo(map);
+  map.on("overlayadd overlayremove", e => e.layer === radar && safeSet("radar", e.type === "overlayadd" ? "1" : "0"));
 }
 function parseLoc(v) {
   if (Array.isArray(v) && v.length >= 2) return { lat: +v[0], lon: +v[1] };
