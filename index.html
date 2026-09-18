@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharwy_home — моніторинг кімнати</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --border: #262b36;
+    --text: #e6e8ec; --muted: #8a90a0; --grid: #232834;
+    --accent: #ff7a30; --ok: #35c07a; --warn: #d9a441; --bad: #e2564f; --info: #4c9eff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f5f7; --card: #ffffff; --border: #e1e4ea;
+      --text: #1d2129; --muted: #6b7280; --grid: #eceef2;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px 60px; background: var(--bg); color: var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+  h1 { font-size: 1.35rem; margin: 0; }
+  h2 { font-size: 1rem; margin: 28px 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  .status { display: flex; gap: 14px; align-items: center; font-size: .85rem; color: var(--muted); flex-wrap: wrap; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .range button { background: var(--card); color: var(--text); border: 1px solid var(--border);
+                  padding: 5px 11px; border-radius: 7px; cursor: pointer; font-size: .82rem; }
+  .range button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .card .label { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; display: flex; justify-content: space-between; }
+  .card .big { font-size: 1.9rem; font-weight: 650; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+  .card .big small { font-size: .95rem; color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .card .verdict { font-size: .88rem; font-weight: 600; }
+  .card .sub { font-size: .78rem; color: var(--muted); margin-top: 6px; line-height: 1.45; }
+  .bar { height: 7px; background: var(--grid); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; border-radius: 4px; transition: width .4s; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .info { color: var(--info); } .muted { color: var(--muted); }
+
+  .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+  .chart-card { height: 250px; display: flex; flex-direction: column; }
+  .chart-card canvas { flex: 1; min-height: 0; }
+  .chart-card .label { margin-bottom: 6px; }
+
+  #map { height: 380px; border-radius: 12px; border: 1px solid var(--border); }
+  .banner { padding: 10px 14px; border-radius: 9px; font-size: .84rem; margin-bottom: 10px; line-height: 1.45; }
+  .banner.warn { background: rgba(217,164,65,.12); border: 1px solid var(--warn); color: var(--text); }
+  .banner.err { background: rgba(226,86,79,.12); border: 1px solid var(--bad); color: var(--text); display: none; }
+  details { margin-top: 28px; font-size: .85rem; color: var(--muted); line-height: 1.55; }
+  details summary { cursor: pointer; color: var(--text); }
+  @media (max-width: 420px) { .charts { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>🏠 Sharwy_home</h1>
+  <div class="status">
+    <span id="online"><span class="dot" style="background:var(--muted)"></span>з'єднання…</span>
+    <span id="updated">—</span>
+    <span class="range" id="range">
+      <button data-h="1">1 год</button>
+      <button data-h="6" class="active">6 год</button>
+      <button data-h="24">24 год</button>
+    </span>
+  </div>
+</header>
+
+<div class="banner err" id="error"></div>
+
+<h2>Зараз</h2>
+<div class="grid" id="now"></div>
+
+<h2>Графіки</h2>
+<div class="charts" id="charts"></div>
+
+<h2>Розташування</h2>
+<div class="banner warn">⚠️ У зоні активного GPS-спуфінгу (РЕБ) координати можуть бути хибними — точка може "пливти" або опинитись на іншому континенті. Це не несправність пристрою.</div>
+<div id="map"></div>
+<div class="sub muted" id="mapNote" style="margin-top:6px;font-size:.8rem"></div>
+
+<details>
+  <summary>Звідки беруться дані</summary>
+  <p>Плата Sodaq Mbili → LoRaWAN → гейтвей MultiTech → Loriot → AllThingsTalk → цей сайт (через AllThingsTalk REST API, прямо з браузера).</p>
+  <p><b>Заряд батареї (asset 14 "Battery level")</b> — це звичайне поле з шаблону пристрою, AllThingsTalk його <b>сам не рахує</b>. Відсоток обчислює прошивка (<code>Combined.ino</code>, функція <code>readBattery()</code>) з напруги LiPo: 3.0 В = 0 %, 4.2 В = 100 % (лінійно), і шле в asset 14. Точна напруга йде окремо в asset 18 "Battery_V". Коли плата живиться від USB, напруга ≈ 4.2 В+ і відсоток показує ~100 % — це заряд, а не реальний рівень.</p>
+  <p><b>Шум і освітлення</b> — це сирі значення АЦП (0–1023), не децибели й не люкси: датчики живляться 3.3 В замість паспортних 5 В, тому абсолютні одиниці не відкалібровані. Категорії ("тихо", "яскраво") — орієнтовні пороги, підібрані за реальними вимірами в кімнаті.</p>
+</details>
+
+</div>
+
+<script>
+/* ================= НАЛАШТУВАННЯ ================= */
+const DEVICE_ID = "7vDnKxQHhCdtJsodSuFgdHAR";
+const DEVICE_TOKEN = "4TOdQcfLxa5cDMbz1EUBr1ZLNEkrixKj3NgYTqvw"; // видимий у коді сторінки
+const STATE_REFRESH_MS = 15000;   // поточні значення
+const HISTORY_REFRESH_MS = 60000; // графіки/карта
+/* ================================================ */
+
+const API = "https://api.allthingstalk.io";
+const AUTH = { Authorization: `Bearer maker:${DEVICE_TOKEN}` };
+let rangeHours = 6;
+let assets = {};        // name -> asset (з поточним state)
+let history = {};       // name -> [{t, v}]
+let lastActiveAt = null;
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = id => document.getElementById(id);
+
+/* ---------- інтерпретація значень ---------- */
+// Кожна функція повертає { text, cls } — людський вердикт + колір.
+const judge = {
+  temp: v => v < 16 ? {text:"Холодно", cls:"info"} : v < 19 ? {text:"Прохолодно", cls:"warn"}
+           : v <= 24 ? {text:"Комфортно", cls:"ok"} : v <= 27 ? {text:"Тепло", cls:"warn"} : {text:"Жарко", cls:"bad"},
+  hum: v => v < 30 ? {text:"Дуже сухо", cls:"bad"} : v < 40 ? {text:"Сухувато", cls:"warn"}
+          : v <= 60 ? {text:"Комфортно", cls:"ok"} : v <= 70 ? {text:"Вологувато", cls:"warn"} : {text:"Дуже волого", cls:"bad"},
+  air: v => [{text:"Чисте повітря", cls:"ok"}, {text:"Легке забруднення", cls:"warn"},
+             {text:"Сильне забруднення", cls:"bad"}, {text:"Дуже сильне — провітріть!", cls:"bad"}][v] || {text:"Невідомо", cls:"muted"},
+  noise: v => v < 25 ? {text:"Тихо", cls:"ok"} : v < 60 ? {text:"Звичайний фон", cls:"ok"}
+            : v < 120 ? {text:"Гучно", cls:"warn"} : {text:"Дуже гучно", cls:"bad"},
+  light: v => v < 30 ? {text:"Темно", cls:"muted"} : v < 200 ? {text:"Тьмяно", cls:"info"}
+            : v < 600 ? {text:"Нормальне освітлення", cls:"ok"} : {text:"Яскраво", cls:"warn"},
+  batt: v => v >= 60 ? {text:"Добре", cls:"ok"} : v >= 25 ? {text:"Середньо", cls:"warn"} : {text:"Низький заряд", cls:"bad"},
+};
+
+/* ---------- API ---------- */
+async function getJSON(url) {
+  const r = await fetch(url, { headers: AUTH });
+  if (!r.ok) throw new Error(`${r.status} для ${url.replace(API, "")}`);
+  return r.json();
+}
+
+async function loadState() {
+  const d = await getJSON(`${API}/device/${DEVICE_ID}`);
+  assets = {};
+  (d.assets || []).forEach(a => { assets[a.name] = a; });
+  lastActiveAt = d.lastActiveAt;
+}
+
+// Історія з усіх сторінок у заданому діапазоні, відсортована за часом.
+async function loadHistory(name, hours) {
+  const to = new Date(), from = new Date(to - hours * 3600e3);
+  const base = `${API}/device/${DEVICE_ID}/asset/${name}/states?from=${from.toISOString()}&to=${to.toISOString()}`;
+  const first = await getJSON(base);
+  let rows = first.data || [];
+  const m = /page=(\d+)/.exec(first.links?.last || "");
+  const lastPage = m ? +m[1] : 0;
+  for (let p = 1; p <= Math.min(lastPage, 20); p++) {
+    const pg = await getJSON(`${base}&page=${p}`);
+    rows = rows.concat(pg.data || []);
+  }
+  const seen = new Set();
+  return rows
+    .map(r => ({ t: new Date(r.at).getTime(), v: r.data }))
+    .filter(r => !seen.has(r.t) && seen.add(r.t))
+    .sort((a, b) => a.t - b.t);
+}
+
+/* ---------- утиліти ---------- */
+const val = n => assets[n]?.state?.value;
+const at = n => assets[n]?.state?.at;
+function ago(iso) {
+  if (!iso) return "ще не було даних";
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return `${Math.round(s)} с тому`;
+  if (s < 3600) return `${Math.round(s / 60)} хв тому`;
+  if (s < 86400) return `${Math.round(s / 3600)} год тому`;
+  return `${Math.round(s / 86400)} дн тому`;
+}
+const validOf = name => (CHARTS.find(c => c.name === name) || {}).valid || (() => true);
+const cleanHist = name => (history[name] || []).filter(p => typeof p.v === "number" && validOf(name)(p.v));
+function trendArrow(name, windowMin, threshold) {
+  const none = `<span class="muted">тренд: мало даних</span>`;
+  const h = cleanHist(name); if (h.length < 2) return none;
+  const now = h[h.length - 1];
+  const past = h.slice().reverse().find(p => now.t - p.t >= windowMin * 60e3);
+  if (!past || now.t - past.t > 3 * windowMin * 60e3) return none;
+  const d = now.v - past.v;
+  if (Math.abs(d) < threshold) return `<span class="muted">→ стабільно</span>`;
+  return d > 0 ? `<span class="warn">↑ +${d.toFixed(1)}</span>` : `<span class="info">↓ ${d.toFixed(1)}</span>`;
+}
+function minMax(name) {
+  const vs = cleanHist(name).map(p => p.v);
+  return vs.length ? { min: Math.min(...vs), max: Math.max(...vs) } : null;
+}
+const verdictHtml = j => `<div class="verdict ${j.cls}">${j.text}</div>`;
+const bar = (pct, color) => `<div class="bar"><div style="width:${Math.max(0, Math.min(100, pct))}%;background:${color}"></div></div>`;
+const colorOf = cls => css({ ok: "--ok", warn: "--warn", bad: "--bad", info: "--info", muted: "--muted" }[cls] || "--muted");
+
+/* ---------- картки "Зараз" ---------- */
+function card(label, bodyHtml, when) {
+  return `<div class="card"><div class="label"><span>${label}</span><span>${when ? ago(when) : ""}</span></div>${bodyHtml}</div>`;
+}
+function noData(label) { return card(label, `<div class="big muted" style="font-size:1.1rem">немає даних</div>`); }
+
+function renderNow() {
+  const out = [];
+
+  // Температура
+  if (typeof val("5") === "number") {
+    const v = val("5"), j = judge.temp(v), mm = minMax("5");
+    out.push(card("Температура", `<div class="big">${v.toFixed(1)}<small>°C</small></div>${verdictHtml(j)}
+      <div class="sub">за 30 хв: ${trendArrow("5", 30, 0.3)}${mm ? `<br>мін ${mm.min.toFixed(1)} / макс ${mm.max.toFixed(1)} °C за ${rangeHours} год` : ""}</div>`, at("5")));
+  } else out.push(noData("Температура"));
+
+  // Вологість
+  if (typeof val("11") === "number") {
+    const v = val("11"), j = judge.hum(v);
+    out.push(card("Вологість", `<div class="big">${v.toFixed(0)}<small>%</small></div>${verdictHtml(j)}
+      ${bar(v, colorOf(j.cls))}<div class="sub">комфорт 40–60 % · за 30 хв: ${trendArrow("11", 30, 1)}</div>`, at("11")));
+  } else out.push(noData("Вологість"));
+
+  // Тиск
+  if (typeof val("10") === "number") {
+    const v = val("10"), mmHg = v * 0.750062;
+    const h = cleanHist("10"); let hint = "мало даних для прогнозу";
+    const past = h.slice().reverse().find(p => h[h.length - 1].t - p.t >= 3 * 3600e3);
+    if (past && h[h.length - 1].t - past.t <= 4 * 3600e3) { // не порівнювати через довгий розрив
+      const d = v - past.v;
+      hint = d > 1.5 ? "↑ росте — ймовірно прояснення" : d < -1.5 ? "↓ падає — можлива негода" : "→ стабільний";
+    }
+    out.push(card("Атм. тиск", `<div class="big">${v.toFixed(1)}<small>гПа</small></div>
+      <div class="verdict muted">${mmHg.toFixed(0)} мм рт. ст.</div><div class="sub">${hint} (за 3 год)</div>`, at("10")));
+  } else out.push(noData("Атм. тиск"));
+
+  // Якість повітря
+  if (typeof val("13") === "number") {
+    const v = val("13"), j = judge.air(v);
+    out.push(card("Якість повітря", `<div class="big">${v}<small>/ 3</small></div>${verdictHtml(j)}
+      ${bar((v / 3) * 100 || 3, colorOf(j.cls))}<div class="sub">0 — чисте, 3 — дуже забруднене</div>`, at("13")));
+  } else out.push(noData("Якість повітря"));
+
+  // Шум
+  if (typeof val("12") === "number") {
+    const v = val("12"), peak = val("15"), j = judge.noise(v);
+    out.push(card("Рівень шуму", `<div class="big">${v}<small>відн. од.</small></div>${verdictHtml(j)}
+      ${bar(v / 3, colorOf(j.cls))}<div class="sub">пік за 1 с: ${typeof peak === "number" ? peak : "—"} · шкала 0–1023, не dB</div>`, at("12")));
+  } else out.push(noData("Рівень шуму"));
+
+  // Освітлення
+  if (typeof val("6") === "number") {
+    const v = val("6"), j = judge.light(v);
+    out.push(card("Освітлення", `<div class="big">${v}<small>/ 1023</small></div>${verdictHtml(j)}
+      ${bar((v / 1023) * 100, colorOf(j.cls))}<div class="sub">сире значення АЦП, не люкси</div>`, at("6")));
+  } else out.push(noData("Освітлення"));
+
+  // Рух
+  if (typeof val("7") === "boolean") {
+    const v = val("7"), h = history["7"] || [];
+    const events = h.filter((p, i) => p.v === true && (i === 0 || h[i - 1].v !== true)).length;
+    const lastMotion = h.slice().reverse().find(p => p.v === true);
+    out.push(card("Рух (PIR)", `<div class="big ${v ? "warn" : "muted"}">${v ? "● Рух" : "○ Тихо"}</div>
+      <div class="sub">останній рух: ${lastMotion ? ago(new Date(lastMotion.t).toISOString()) : "не було за період"}<br>
+      ${events} спрацювань за ${rangeHours} год</div>`, at("7")));
+  } else out.push(noData("Рух (PIR)"));
+
+  // Батарея (asset 14 + 18; asset 17 "BatteryP" навмисно ігнорується)
+  if (typeof val("14") === "number") {
+    const v = val("14"), volt = val("18"), j = judge.batt(v);
+    const usb = typeof volt === "number" && volt >= 4.2;
+    out.push(card("Батарея", `<div class="big">${v}<small>%</small></div>${verdictHtml(usb ? {text:"Живлення від USB / заряджається", cls:"info"} : j)}
+      ${bar(v, colorOf(usb ? "info" : j.cls))}<div class="sub">${typeof volt === "number" ? volt.toFixed(2) + " В" : "напруга невідома"}${usb ? " — при ≥4.2 В відсоток не показовий" : ""}</div>`, at("14")));
+  } else out.push(noData("Батарея"));
+
+  $("now").innerHTML = out.join("");
+}
+
+/* ---------- графіки ---------- */
+// valid — відсікає фізично неможливі значення. Рівно 0 °C / 0 % у кімнаті —
+// це не вимір, а старі записи прошивки TPH, яка слала 0, коли BME280 не
+// знаходився. Без фільтра графік "падає в нуль" і ламає масштаб.
+const CHARTS = [
+  { name: "5",  title: "Температура, °C",     color: "--accent", valid: v => v !== 0 && v > -40 && v < 85 },
+  { name: "11", title: "Вологість, %",        color: "--info",   valid: v => v > 0 && v <= 100 },
+  { name: "10", title: "Атм. тиск, гПа",      color: "--muted",  valid: v => v > 300 && v < 1100 },
+  { name: "12", title: "Шум (середній), відн. од.", color: "--warn", extra: { name: "15", label: "пік" } },
+  { name: "6",  title: "Освітлення, 0–1023",  color: "--warn" },
+  { name: "13", title: "Якість повітря, 0–3", color: "--bad",  step: true, min: 0, max: 3 },
+  { name: "7",  title: "Рух (PIR)",           color: "--warn", step: true, bool: true },
+  { name: "14", title: "Батарея, %",          color: "--ok",   min: 0, max: 100 },
+];
+const charts = {};
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  return rangeHours > 12
+    ? d.toLocaleString("uk-UA", { day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
+}
+
+function buildCharts() {
+  $("charts").innerHTML = CHARTS.map(c =>
+    `<div class="card chart-card"><div class="label"><span>${c.title}</span><span id="cnt-${c.name}"></span></div><canvas id="ch-${c.name}"></canvas></div>`
+  ).join("");
+  CHARTS.forEach(c => {
+    const ds = [{
+      label: c.title, data: [], borderColor: css(c.color), backgroundColor: css(c.color) + "22",
+      borderWidth: 2, pointRadius: 0, tension: c.step ? 0 : 0.25, stepped: c.step ? "before" : false, fill: true,
+    }];
+    if (c.extra) ds.push({ label: c.extra.label, data: [], borderColor: css("--bad"), borderWidth: 1, borderDash: [4, 3], pointRadius: 0, tension: 0.25 });
+    charts[c.name] = new Chart($("ch-" + c.name), {
+      type: "line",
+      data: { datasets: ds },
+      options: {
+        animation: false, responsive: true, maintainAspectRatio: false, parsing: false,
+        interaction: { mode: "nearest", axis: "x", intersect: false },
+        plugins: {
+          legend: { display: !!c.extra, labels: { color: css("--muted"), boxWidth: 12 } },
+          tooltip: { callbacks: {
+            title: items => new Date(items[0].parsed.x).toLocaleString("uk-UA"),
+            label: item => c.bool ? (item.parsed.y ? "рух" : "тихо") : `${item.dataset.label}: ${(+item.parsed.y).toFixed(1)}`,
+          } },
+        },
+        scales: {
+          x: { type: "linear", ticks: { color: css("--muted"), maxTicksLimit: 6, callback: v => fmtTime(v) }, grid: { color: css("--grid") } },
+          y: { min: c.bool ? 0 : c.min, max: c.bool ? 1 : c.max,
+               ticks: { color: css("--muted"), stepSize: c.bool || c.step ? 1 : undefined, callback: v => c.bool ? (v ? "рух" : "") : v },
+               grid: { color: css("--grid") } },
+        },
+      },
+    });
+  });
+}
+
+// Розрив лінії, якщо між сусідніми точками більше GAP_MS (плата була
+// вимкнена) — інакше Chart.js малює пряму через проміжок без даних.
+const GAP_MS = 10 * 60e3;
+function toPoints(name, bool, valid) {
+  const raw = (history[name] || [])
+    .filter(p => bool ? typeof p.v === "boolean" : typeof p.v === "number")
+    .filter(p => bool || !valid || valid(p.v));
+  const out = [];
+  raw.forEach((p, i) => {
+    if (i > 0 && p.t - raw[i - 1].t > GAP_MS) out.push({ x: raw[i - 1].t + 1, y: null });
+    out.push({ x: p.t, y: bool ? (p.v ? 1 : 0) : p.v });
+  });
+  return out;
+}
+
+function updateCharts() {
+  CHARTS.forEach(c => {
+    const ch = charts[c.name]; if (!ch) return;
+    const pts = toPoints(c.name, c.bool, c.valid);
+    ch.data.datasets[0].data = pts;
+    if (c.extra) ch.data.datasets[1].data = toPoints(c.extra.name);
+    const now = Date.now();
+    ch.options.scales.x.min = now - rangeHours * 3600e3;
+    ch.options.scales.x.max = now;
+    ch.update("none");
+    const n = pts.filter(p => p.y !== null).length;
+    $("cnt-" + c.name).textContent = n ? `${n} точок` : "немає даних";
+  });
+}
+
+/* ---------- карта ---------- */
+let map, marker, track;
+function initMap() {
+  map = L.map("map", { zoomControl: true }).setView([50.45, 30.52], 5);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: "© OpenStreetMap",
+  }).addTo(map);
+}
+function parseLoc(v) {
+  if (!v) return null;
+  if (Array.isArray(v) && v.length >= 2) return { lat: +v[0], lon: +v[1] };
+  if (typeof v === "object" && "latitude" in v) return { lat: +v.latitude, lon: +v.longitude };
+  return null;
+}
+function updateMap() {
+  const pts = (history["9"] || []).map(p => ({ t: p.t, ...parseLoc(p.v) })).filter(p => isFinite(p.lat) && isFinite(p.lon));
+  const cur = parseLoc(val("9"));
+  if (track) { map.removeLayer(track); track = null; }
+  if (marker) { map.removeLayer(marker); marker = null; }
+  if (pts.length > 1) {
+    track = L.polyline(pts.map(p => [p.lat, p.lon]), { color: css("--accent"), weight: 2, opacity: .7, dashArray: "4 4" }).addTo(map);
+  }
+  const last = cur || (pts.length ? pts[pts.length - 1] : null);
+  if (last) {
+    marker = L.marker([last.lat, last.lon]).addTo(map)
+      .bindPopup(`${last.lat.toFixed(6)}, ${last.lon.toFixed(6)}<br>${ago(at("9"))}`);
+    if (track) map.fitBounds(track.getBounds(), { padding: [30, 30], maxZoom: 15 });
+    else map.setView([last.lat, last.lon], 14);
+    $("mapNote").textContent = `Остання позиція ${ago(at("9"))} · ${pts.length} точок треку за ${rangeHours} год`;
+  } else {
+    $("mapNote").textContent = "GPS ще не передавав координат (немає фіксу, або прошивка ще не оновлена — див. Combined.ino, asset 9).";
+  }
+}
+
+/* ---------- статус ---------- */
+function renderStatus() {
+  const s = lastActiveAt ? (Date.now() - new Date(lastActiveAt)) / 1000 : Infinity;
+  const [c, t] = s < 180 ? ["--ok", "онлайн"] : s < 1800 ? ["--warn", "давно не було даних"] : ["--bad", "офлайн"];
+  $("online").innerHTML = `<span class="dot" style="background:${css(c)}"></span>${t} · ${ago(lastActiveAt)}`;
+  $("updated").textContent = `оновлено ${new Date().toLocaleTimeString("uk-UA")}`;
+}
+
+/* ---------- цикли оновлення ---------- */
+function showError(e) {
+  $("error").style.display = "block";
+  $("error").textContent = "Помилка завантаження: " + e.message + " — перевірте DEVICE_ID/DEVICE_TOKEN та інтернет.";
+}
+async function refreshState() {
+  try { await loadState(); $("error").style.display = "none"; renderNow(); renderStatus(); }
+  catch (e) { showError(e); }
+}
+async function refreshHistory() {
+  try {
+    const names = [...new Set([...CHARTS.map(c => c.name), "15", "9"])];
+    const results = await Promise.all(names.map(n => loadHistory(n, rangeHours).catch(() => [])));
+    names.forEach((n, i) => { history[n] = results[i]; });
+    updateCharts(); updateMap(); renderNow();
+  } catch (e) { showError(e); }
+}
+
+$("range").addEventListener("click", e => {
+  const h = +e.target.dataset?.h; if (!h) return;
+  rangeHours = h;
+  document.querySelectorAll("#range button").forEach(b => b.classList.toggle("active", +b.dataset.h === h));
+  refreshHistory();
+});
+
+buildCharts();
+initMap();
+refreshState().then(refreshHistory);
+setInterval(refreshState, STATE_REFRESH_MS);
+setInterval(refreshHistory, HISTORY_REFRESH_MS);
+</script>
+</body>
+</html>
