@@ -43,6 +43,10 @@ header{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:s
 .seg button,.icon-btn{border:0;background:none;color:var(--muted);font:500 .82rem Inter;padding:7px 12px;border-radius:9px;cursor:pointer}
 .seg button.active{background:var(--accent);color:#fff;box-shadow:0 4px 12px color-mix(in srgb,var(--accent) 40%,transparent)}
 .icon-btn{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px 12px}
+.icon-btn.on{background:var(--accent);color:#fff;border-color:transparent}
+.reset-zoom{border:1px solid var(--border);background:var(--grid);color:var(--text);font:500 .72rem Inter;padding:3px 9px;border-radius:8px;cursor:pointer}
+.reset-zoom[hidden]{display:none}
+.hint{font-size:.75rem;color:var(--muted);margin:-6px 4px 12px}
 .icon-btn:hover,.seg button:not(.active):hover{color:var(--text)}
 .panel{background:var(--panel);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);backdrop-filter:blur(14px)}
 .status{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;overflow:hidden;margin-bottom:20px}
@@ -106,6 +110,7 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:.75rem}
         <button data-h="1">1 год</button><button data-h="6" class="active">6 год</button>
         <button data-h="24">24 год</button><button data-h="72">3 дні</button>
       </div>
+      <button class="icon-btn" id="sync" title="Спільний курсор і зум для всіх графіків (як у Grafana)">⛓ Синхронно</button>
       <button class="icon-btn" id="csv" title="Завантажити дані періоду як CSV">⤓ CSV</button>
       <button class="icon-btn" id="theme" title="Світла / темна тема">◐</button>
     </div>
@@ -125,6 +130,7 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:.75rem}
   </section>
 
   <h2>Історія</h2>
+  <p class="hint" id="zoomHint">Виділіть мишею ділянку графіка, щоб наблизити · подвійний клік — весь період · Ctrl + колесо — плавний зум</p>
   <section class="grid2" id="charts"></section>
 
   <h2>Місцезнаходження</h2>
@@ -362,18 +368,30 @@ function baseOpt() {
     xAxis: { type: "time", min: Date.now() - rangeHours * 3600e3, max: Date.now(), splitNumber: 5,
       axisLabel: { color: muted, formatter: timeFmt, hideOverlap: true }, axisLine: { lineStyle: { color: grid } }, splitLine: { show: false } },
     yAxis: { type: "value", axisLabel: { color: muted }, splitLine: { lineStyle: { color: grid } } },
-    dataZoom: [{ type: "inside", filterMode: "none" }],
+    // колесо НЕ зумить (прокрутка сторінки), Ctrl+колесо — зум; виділення мишею — зум (як у Grafana)
+    dataZoom: [{ type: "inside", filterMode: "none", zoomOnMouseWheel: "ctrl", moveOnMouseWheel: false, moveOnMouseMove: false, preventDefaultMouseMove: false }],
+    toolbox: { show: false, feature: { dataZoom: { yAxisIndex: "none" } } },
   };
 }
 function buildCharts() {
   $("charts").innerHTML = CHARTS.map(c => {
     const m = M[c.n];
     return `<div class="panel chart-panel${c.n === "7" ? "" : ""}"><div class="head"><b style="color:${css(m.c)}">●</b><b style="margin-right:auto">${c.title || `${m.title}${m.unit && !m.unit.startsWith("/") ? ", " + m.unit : ""}`}</b>
-      <span class="stats" id="st-${c.n}"></span></div><div class="chart" id="ch-${c.n}"></div></div>`;
+      <button class="reset-zoom" id="rz-${c.n}" hidden onclick="resetZoom('${c.n}')" title="Показати весь період">⟲ весь період</button><span class="stats" id="st-${c.n}"></span></div><div class="chart" id="ch-${c.n}"></div></div>`;
   }).join("");
   CHARTS.forEach(c => { charts[c.n] = echarts.init($("ch-" + c.n), null, { renderer: "canvas" }); });
   ["comfort", "uplink"].forEach(k => { charts[k] = echarts.init($("c-" + k)); });
-  echarts.connect(CHARTS.map(c => charts[c.n]));
+  CHARTS.forEach(c => {
+    const ch = charts[c.n];
+    ch.on("datazoom", () => {
+      const dz = ch.getOption().dataZoom?.[0];
+      const zoomed = dz && (dz.start > 0.01 || dz.end < 99.99);
+      zoomState[c.n] = zoomed ? [dz.startValue, dz.endValue] : null;
+      $("rz-" + c.n).hidden = !zoomed;
+    });
+    ch.getZr().on("dblclick", () => resetZoom(c.n));
+  });
+  applySync();
 }
 function motionBuckets() { // кількість нових спрацювань PIR (фронт тихо→рух) у кожному інтервалі
   const h = clean("7"), bucket = rangeHours <= 1 ? 5 * 60e3 : rangeHours <= 6 ? 15 * 60e3 : rangeHours <= 24 ? 3600e3 : 3 * 3600e3;
@@ -390,8 +408,26 @@ function updateMotion() {
   const col = css("--pir");
   o.series = [{ type: "bar", data, barWidth: "75%", itemStyle: { borderRadius: [4, 4, 0, 0],
     color: p => p.value[1] ? hexA(col, .35 + .65 * p.value[1] / ax.max) : "transparent" } }];
-  charts["7"].setOption(o, true);
+  charts["7"].setOption(o, true); finishChart("7");
   $("st-7").innerHTML = `<b>${total}</b> спрацювань · стовпчик = ${label}`;
+}
+const zoomState = {}; // n -> [startValue, endValue], щоб автооновлення щохвилини не скидало зум
+const TOUCH = matchMedia("(pointer: coarse)").matches;
+function finishChart(n) {
+  const ch = charts[n];
+  if (zoomState[n]) ch.dispatchAction({ type: "dataZoom", startValue: zoomState[n][0], endValue: zoomState[n][1] });
+  // на тач-екранах режим виділення вимкнено — інакше палець не прокручує сторінку
+  if (!TOUCH) ch.dispatchAction({ type: "takeGlobalCursor", key: "dataZoomSelect", dataZoomSelectActive: true });
+}
+function resetZoom(n) {
+  zoomState[n] = null; $("rz-" + n).hidden = true;
+  charts[n].dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+}
+let syncOn = safeGet("sync") === "1";
+function applySync() {
+  const group = CHARTS.map(c => charts[c.n]);
+  if (syncOn) echarts.connect(group); else group.forEach(ch => { ch.group = ""; });
+  $("sync").classList.toggle("on", syncOn);
 }
 function updateCharts() {
   CHARTS.forEach(c => {
@@ -427,7 +463,7 @@ function updateCharts() {
                   [{ yAxis: 4.15, name: "заряд / USB", itemStyle: { color: hexA(css("--info"), .1) } }, { yAxis: 4.4 }]] } : undefined }];
     if (c.extra) o.series.push({ name: "пік", type: "line", data: series(c.extra), showSymbol: false, sampling: "lttb",
       lineStyle: { width: 1, type: "dashed", color: css("--bad"), opacity: .7 }, itemStyle: { color: css("--bad") } });
-    charts[c.n].setOption(o, true);
+    charts[c.n].setOption(o, true); finishChart(c.n);
     $("st-" + c.n).innerHTML = !s ? "немає даних" : m.bool ? `${s.n} вимірів`
       : `мін <b>${fmt(s.min, dec)}</b> сер <b>${fmt(s.avg, dec)}</b> макс <b>${fmt(s.max, dec)}</b>`;
   });
@@ -587,6 +623,7 @@ function setRange(h) {
 }
 $("range").addEventListener("click", e => { const h = +e.target.dataset?.h; if (h) { setRange(h); refreshHistory(); } });
 $("csv").addEventListener("click", exportCSV);
+$("sync").addEventListener("click", () => { syncOn = !syncOn; safeSet("sync", syncOn ? "1" : "0"); applySync(); });
 $("theme").addEventListener("click", () => {
   const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark"; safeSet("theme", document.documentElement.dataset.theme);
@@ -596,6 +633,7 @@ addEventListener("resize", () => Object.values(charts).forEach(c => c.resize()))
 
 const savedTheme = safeGet("theme"); if (savedTheme) document.documentElement.dataset.theme = savedTheme;
 setRange(rangeHours);
+if (TOUCH) $("zoomHint").textContent = "Торкніться графіка, щоб побачити значення · зум двома пальцями";
 buildCharts(); initMap();
 refreshState().then(refreshHistory);
 setInterval(refreshState, STATE_REFRESH_MS);
