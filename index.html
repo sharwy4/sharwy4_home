@@ -90,6 +90,7 @@ code{font-family:"JetBrains Mono",monospace;font-size:.8em;background:var(--grid
 .flow span{padding:6px 10px;border-radius:10px;background:var(--grid)}
 footer{margin-top:28px;text-align:center;color:var(--muted);font-size:.75rem}
 .leaflet-container{background:var(--bg2)}
+.dark-tiles{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
 @media (max-width:600px){.grid2{grid-template-columns:1fr}.big{font-size:1.9rem}.chart{height:200px}}
 </style>
 </head>
@@ -133,17 +134,6 @@ footer{margin-top:28px;text-align:center;color:var(--muted);font-size:.75rem}
     <div class="meta" id="mapNote"></div>
   </section>
 
-  <details class="panel">
-    <summary>Звідки беруться дані</summary>
-    <div class="flow"><span>Датчики Grove</span>→<span>Sodaq Mbili (CBOR)</span>→<span>LoRa 868 МГц, SF7</span>→<span>MultiTech Conduit</span>→<span>Loriot</span>→<span>AllThingsTalk</span>→<span>ця сторінка (REST API)</span></div>
-    <ul>
-      <li><b>Батарея</b> — asset <code>14</code>. AllThingsTalk його <b>не рахує</b>: відсоток обчислює прошивка з напруги (3.0 В = 0 %, 4.2 В = 100 %) і шле разом з напругою (<code>18</code>). Від USB/сонця напруга ≥ 4.15 В — відсоток тоді показує заряд, а не залишок. Asset <code>17</code> BatteryP не використовується.</li>
-      <li><b>Шум і освітлення</b> — сирі значення АЦП 0–1023 (датчики живляться 3.3 В замість 5 В), не децибели й не люкси.</li>
-      <li><b>Точка роси</b> і «відчувається як» — обчислюються на сторінці з температури й вологості (формула Магнуса).</li>
-      <li>Якщо між вимірами понад 10 хв — лінія графіка розривається (плата була вимкнена), а не з'єднується навпростець.</li>
-      <li>Фізично неможливі значення (рівно 0 °C / 0 % від старої прошивки без BME280) відкидаються.</li>
-    </ul>
-  </details>
 
   <footer id="updated"></footer>
 </div>
@@ -463,14 +453,28 @@ function updateUplink() { // пакети = унікальні моменти в
 }
 
 /* ---------- карта ---------- */
-let map, marker, track, tiles;
-function tileUrl() {
-  const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
-  return `https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`;
+let map, marker, track;
+// Лише шари БЕЗ API-ключа (CARTO тепер вимагає ключ — показував "API KEY REQUIRED")
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
+function baseLayers() {
+  const osm = () => L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" });
+  const labels = L.tileLayer(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 19 });
+  return {
+    "Звичайна": osm(),
+    "Темна": osm().on("add", e => e.target.getContainer().classList.add("dark-tiles")),
+    "Супутник": L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 19, attribution: "© Esri, Maxar" }),
+    "Супутник + підписи": L.layerGroup([L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 19, attribution: "© Esri, Maxar" }), labels]),
+    "Рельєф": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", { maxZoom: 17, attribution: "© OpenTopoMap (CC-BY-SA), © OpenStreetMap" }),
+  };
 }
 function initMap() {
-  map = L.map("map", { attributionControl: true }).setView([49, 31], 5);
-  tiles = L.tileLayer(tileUrl(), { maxZoom: 19, attribution: "© OpenStreetMap © CARTO" }).addTo(map);
+  map = L.map("map").setView([49, 31], 5);
+  const layers = baseLayers();
+  const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  const saved = safeGet("mapLayer");
+  (layers[saved] || layers[dark ? "Темна" : "Звичайна"]).addTo(map);
+  L.control.layers(layers, null, { position: "topright" }).addTo(map);
+  map.on("baselayerchange", e => safeSet("mapLayer", e.name));
 }
 function parseLoc(v) {
   if (Array.isArray(v) && v.length >= 2) return { lat: +v[0], lon: +v[1] };
@@ -544,7 +548,7 @@ $("csv").addEventListener("click", exportCSV);
 $("theme").addEventListener("click", () => {
   const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark"; safeSet("theme", document.documentElement.dataset.theme);
-  tiles.setUrl(tileUrl()); updateCharts(); renderTiles(); updateMap();
+  updateCharts(); renderTiles(); updateMap();
 });
 addEventListener("resize", () => Object.values(charts).forEach(c => c.resize()));
 
