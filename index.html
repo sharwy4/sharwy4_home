@@ -303,10 +303,14 @@ function renderTiles() {
   } else out.push(empty("7"));
 
   if (typeof val("14") === "number") {
-    const B = val("14"), U = val("18"), charging = typeof U === "number" && U >= 4.15;
-    const hU = clean("18"), dropH = hU.length > 20 ? (hU.at(-1).v - hU[0].v) / ((hU.at(-1).t - hU[0].t) / 3600e3) : null;
+    const B = val("14"), U = val("18"), charging = typeof U === "number" && U >= 4.15, pm = powerMode();
+    // швидкість зміни напруги за останню годину (не за весь період — вдень/вночі вона різна)
+    const hU = clean("18").filter(p => p.t > Date.now() - 3600e3);
+    const dropH = hU.length > 10 && hU.at(-1).t - hU[0].t > 30 * 60e3 ? (hU.at(-1).v - hU[0].v) / ((hU.at(-1).t - hU[0].t) / 3600e3) : null;
+    const toSleep = dropH !== null && dropH < -0.005 && U > 3.65 ? (U - 3.65) / -dropH : null;
     out.push(tile("14", `<div class="big">${B}<small>%</small></div>`, `${chip(charging ? V("Заряджається / зовнішнє живлення", "--info") : judge["14"](B))}${meter(B)}
-      <div class="meta"><b>${fmt(U, 2)} В</b>${dropH !== null ? ` · ${dropH >= 0 ? "+" : ""}${fmt(dropH * 1000, 0)} мВ/год` : ""}</div>`));
+      <div class="meta"><b>${fmt(U, 2)} В</b>${dropH !== null ? ` · ${dropH >= 0 ? "+" : ""}${fmt(dropH * 1000, 0)} мВ/год` : ""}
+      ${pm !== null ? `<br>режим: <b style="color:${css(PM[pm].c)}">${PM[pm].t}</b>` : ""}${toSleep !== null ? ` · до сну ≈ <b>${fmt(toSleep, 1)} год</b>` : ""}</div>`));
   } else out.push(empty("14"));
 
   $("tiles").innerHTML = out.join("");
@@ -461,6 +465,10 @@ function updateCharts() {
               : c.n === "18" ? { silent: true, label: { color: css("--muted"), fontSize: 10, position: "insideTopLeft" }, data: [
                   [{ yAxis: 3.0, name: "розряджена", itemStyle: { color: hexA(css("--bad"), .1) } }, { yAxis: 3.5 }],
                   [{ yAxis: 4.15, name: "заряд / USB", itemStyle: { color: hexA(css("--info"), .1) } }, { yAxis: 4.4 }]] } : undefined }];
+    if (c.n === "18") o.series[0].markLine = { symbol: "none", silent: true, label: { color: css("--muted"), fontSize: 10, position: "insideEndTop" },
+      lineStyle: { type: "dashed", opacity: .7 }, data: [
+        { yAxis: 3.80, name: "економ", lineStyle: { color: css("--warn") }, label: { formatter: "економ < 3.80" } },
+        { yAxis: 3.65, name: "сон", lineStyle: { color: css("--info") }, label: { formatter: "сон < 3.65" } }] };
     if (c.extra) o.series.push({ name: "пік", type: "line", data: series(c.extra), showSymbol: false, sampling: "lttb",
       lineStyle: { width: 1, type: "dashed", color: css("--bad"), opacity: .7 }, itemStyle: { color: css("--bad") } });
     charts[c.n].setOption(o, true); finishChart(c.n);
@@ -574,15 +582,26 @@ function updateMap() {
   } else $("mapNote").textContent = "GPS ще не передавав координат за цей період (немає супутникового фіксу).";
 }
 
+/* ---------- режим живлення (asset 16: 0 норма, 1 економ, 2 сон) ---------- */
+// Раніше в 16 писали інші скетчі (сире АЦП тощо) — довіряємо лише 0/1/2.
+const PM = [
+  { t: "Норма", c: "--ok", d: "усі датчики, GPS за розкладом" },
+  { t: "Економ", c: "--warn", d: "без GPS, пакет раз на 5 хв (акум < 50 %)" },
+  { t: "Сон", c: "--info", d: "глибокий сон, пакет раз на годину (акум < 20 %); прокинеться, коли сонце зарядить" },
+];
+const powerMode = () => { const v = val("16"); return [0, 1, 2].includes(v) ? v : null; };
+
 /* ---------- статус-смуга ---------- */
 function renderStatus() {
   const s = lastActiveAt ? (Date.now() - new Date(lastActiveAt)) / 1000 : Infinity;
-  const on = s < 180, h = clean("18").length ? clean("18") : clean("14");
+  const pm = powerMode(), sleeping = pm === 2 && s < 75 * 60;
+  const on = s < (pm === 1 ? 420 : 180), h = clean("18").length ? clean("18") : clean("14");
   let iv = null; if (h.length > 3) { const d = h.slice(-20).map((p, i, a) => i ? p.t - a[i - 1].t : null).filter(x => x && x < GAP_MS).sort((a, b) => a - b); iv = d[Math.floor(d.length / 2)]; }
   const expected = iv ? rangeHours * 3600e3 / iv : null;
   const rel = expected ? Math.min(100, h.length / expected * 100) : null;
   const items = [
-    ["Пристрій", `<span class="pulse ${on ? "on" : ""}"></span>${on ? "онлайн" : s < 1800 ? "мовчить" : "офлайн"}`],
+    ["Пристрій", `<span class="pulse ${on ? "on" : ""}"></span>${on ? "онлайн" : sleeping ? "спить (економія)" : s < 1800 ? "мовчить" : "офлайн"}`],
+    ["Режим живлення", pm === null ? "—" : `<span class="chip" style="--cc:${css(PM[pm].c)}" title="${PM[pm].d}">${PM[pm].t}</span>`],
     ["Останній пакет", ago(lastActiveAt)],
     ["Інтервал відправки", iv ? `≈ ${fmt(iv / 1000, 0)} с` : "—"],
     ["Доставлено за період", rel !== null ? `${fmt(rel, 0)} %` : "—"],
@@ -611,7 +630,7 @@ async function refreshState() {
 }
 async function refreshHistory() {
   try {
-    const names = [...new Set([...CHARTS.map(c => c.n), "15", "9", "14", "18"])];
+    const names = [...new Set([...CHARTS.map(c => c.n), "15", "9", "14", "18", "16"])];
     const res = await Promise.all(names.map(n => loadHistory(n, rangeHours).catch(() => [])));
     names.forEach((n, i) => history[n] = res[i]);
     updateCharts(); updateMap(); renderTiles(); renderStatus();
