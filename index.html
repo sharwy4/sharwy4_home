@@ -200,6 +200,8 @@ const M = {
   "6":  { title: "Освітлення", unit: "%", c: "--light", ico: "☀", dec: 0, min: 0, max: 100, tf: v => Math.min(100, v / LIGHT_MAX * 100) },
   "7":  { title: "Рух (PIR)", unit: "", c: "--pir", ico: "◉", bool: true },
   "14": { title: "Батарея", unit: "%", c: "--batt", ico: "▮", dec: 0, min: 0, max: 100 },
+  // A7 через дільник 4.7k/4.7k; стеля вимірювання ~6.6 В
+  "19": { title: "Сонячна панель", unit: "В", c: "--light", ico: "☀", dec: 2, valid: v => v >= 0 && v <= 7, min: 0 },
   "18": { title: "Напруга батареї", unit: "В", c: "--batt", dec: 2, valid: v => v > 2 && v < 6, min: 3.0, max: 4.4 },
 };
 const val = n => assets[n]?.state?.value, at = n => assets[n]?.state?.at;
@@ -314,12 +316,23 @@ function renderTiles() {
       ${pm !== null ? `<br>режим: <b style="color:${css(PM[pm].c)}">${PM[pm].t}</b>` : ""}${toSleep !== null ? ` · до сну ≈ <b>${fmt(toSleep, 1)} год</b>` : ""}</div>`));
   } else out.push(empty("14"));
 
+  if (typeof val("19") === "number") {
+    const S = val("19"), U = val("18"), s19 = stats("19");
+    const j = S >= 6.5 ? V("Більше за межу вимірювання", "--warn")
+            : typeof U === "number" && S > U + 0.3 ? V("Заряджає акумулятор", "--ok")
+            : S > 0.3 ? V("Світла мало — заряду майже немає", "--warn")
+            : V("Темно або панель не підключена", "--muted");
+    out.push(tile("19", `<div class="big">${fmt(S, 2)}<small>В</small></div>`, `${chip(j)}${meter(S / 7 * 100)}
+      <div class="meta">зарядка починається приблизно від <b>5 В</b>${s19 ? `<br>макс за період <b>${fmt(s19.max, 2)} В</b>` : ""}
+      <br>стеля вимірювання ~6.6 В (дільник на A7)</div>`));
+  } else out.push(empty("19"));
+
   const pm = powerMode();
   const note = pm === 2 ? `<div class="banner" style="grid-column:1/-1;margin:0">🌙 Плата в режимі <b>Сон</b> (акумулятор нижче 3.65 В): датчики не опитуються, показано останні значення перед засинанням. Раз на годину приходить лише напруга. Плата прокинеться сама, коли сонце зарядить акумулятор до 3.80 В.</div>`
     : pm === 1 ? `<div class="banner" style="grid-column:1/-1;margin:0">🔋 Режим <b>Економ</b> (акумулятор нижче 3.80 В): GPS вимкнено, дані приходять раз на 5 хв.</div>` : "";
   $("tiles").innerHTML = note + out.join("");
   // спарклайни — ECharts без осей
-  ["5", "11", "10", "13", "12", "6", "7", "14"].forEach(n => {
+  ["5", "11", "10", "13", "12", "6", "7", "14", "19"].forEach(n => {
     const el = $("sp-" + n); if (!el) return;
     const ch = echarts.init(el, null, { renderer: "svg" });
     const pts = series(n);
@@ -362,7 +375,7 @@ const timeFmt = t => { const d = new Date(t);
     : d.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }); };
 
 const CHARTS = [
-  { n: "5" }, { n: "11" }, { n: "10" }, { n: "12", extra: "15" }, { n: "6" }, { n: "13" }, { n: "7", title: "Рух — спрацювання PIR" }, { n: "18", title: "Батарея, В" },
+  { n: "5" }, { n: "11" }, { n: "10" }, { n: "12", extra: "15" }, { n: "6" }, { n: "13" }, { n: "7", title: "Рух — спрацювання PIR" }, { n: "18", title: "Батарея, В" }, { n: "19", title: "Сонячна панель, В" },
 ];
 const charts = {};
 function baseOpt() {
